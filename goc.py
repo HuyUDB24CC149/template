@@ -82,7 +82,7 @@ try:
     with open("proxy.txt", "r") as f:
         api_keys = [line.strip() for line in f.readlines()]
     
-    if len(api_keys) < 6:
+    if len(api_keys) < 7:
         print(f"Cảnh báo: Có ít hơn 6 API key trong file proxy.txt. Một số luồng sẽ không hoạt động.")
     
     print(f"Đã tải {len(api_keys)} API key từ file proxy.txt")
@@ -236,7 +236,7 @@ def process_profile(thread_id, api_key, window_pos):
 # ---------------------------------------
 if __name__ == "__main__":
     # Xác định số lượng luồng dựa trên số API key có sẵn
-    num_threads = min(6, len(api_keys))
+    num_threads = min(7, len(api_keys))
     
     if num_threads == 0:
         print("Không có API key nào trong file proxy.txt. Không thể chạy chương trình.")
