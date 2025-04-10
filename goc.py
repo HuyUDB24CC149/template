@@ -13,25 +13,57 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
 # ---------------------------------------
+# Hàm lấy proxy từ API key
+# ---------------------------------------
+def get_proxy_from_api(api_key):
+    """
+    Lấy proxy từ API key thông qua API WWProxy
+    Trả về chuỗi proxy nếu thành công, None nếu thất bại, hoặc dict với key "wait" nếu cần đợi
+    """
+    api_url = f"https://wwproxy.com/api/client/proxy/available?key={api_key}&provinceId=-1"
+    
+    try:
+        response = requests.get(api_url)
+        data = response.json()
+        
+        if data.get("status") == "OK" and data.get("data") and data["data"].get("proxy"):
+            proxy = data["data"]["proxy"]
+            print(f"Đã lấy được proxy: {proxy} từ API key: {api_key}")
+            return proxy
+        elif data.get("status") == "BAD_REQUEST" and "Vui lòng chờ thêm" in data.get("message", ""):
+            # Trích xuất thời gian cần chờ từ thông báo lỗi
+            wait_time_match = re.search(r'(\d+)s', data.get("message", ""))
+            if wait_time_match:
+                wait_seconds = int(wait_time_match.group(1)) + 2
+                print(f"Cần đợi {wait_seconds} giây trước khi lấy proxy mới từ API key: {api_key}")
+                return {"wait": wait_seconds}
+        
+        print(f"Lỗi khi lấy proxy từ API key {api_key}: {data}")
+        return None
+    except Exception as e:
+        print(f"Exception khi lấy proxy từ API key {api_key}: {e}")
+        return None
+
+# ---------------------------------------
 # Hàm cập nhật proxy cho profile
 # ---------------------------------------
 def update_proxy(profile_id, raw_proxy):
     """
     Cập nhật proxy cho profile trước khi mở.
-    Gửi POST request với raw_proxy (prefix là "http://").
+    Gửi POST request với raw_proxy.
     Nếu trả về "Profile not found" thì log profile_id ra file profileloi.txt.
     """
     update_url = f"http://127.0.0.1:19995/api/v3/profiles/update/{profile_id}"
     headers = {"accept": "application/json", "Content-Type": "application/json"}
-    data = {"raw_proxy": f"http://{raw_proxy}"}
+    data = {"raw_proxy": f"{raw_proxy}"} # Không cần thêm http:// prefix
     try:
         r = requests.post(update_url, headers=headers, json=data)
         r.raise_for_status()
         response_json = r.json()
-        if response_json.get("success") and response_json.get("message") == "Update profile success":
+        if response_json.get("success"):
             print(f"Proxy updated successfully for profile {profile_id}.")
             return True
-        elif (not response_json.get("success")) and response_json.get("message") == "Profile not found":
+        elif response_json.get("message") == "Profile not found":
             print(f"Update failed. Profile not found: {profile_id}")
             with open("profileloi.txt", "a") as f:
                 f.write(str(profile_id) + "\n")
@@ -44,67 +76,20 @@ def update_proxy(profile_id, raw_proxy):
         return False
 
 # ---------------------------------------
-# Hàm đổi IP
-# ---------------------------------------
-def change_ip(change_ip_url):
-    """
-    Gọi GET request tới API đổi IP.
-    Nếu API trả về lỗi "Vui lòng chờ sau X giây" thì đợi (X+2) giây rồi retry.
-    """
-    while True:
-        try:
-            r = requests.get(change_ip_url)
-            try:
-                response_json = r.json()
-            except Exception:
-                print("Lỗi khi parse JSON từ API đổi IP, retry sau 10 giây...")
-                time.sleep(10)
-                continue
-
-            if response_json.get("status") == "success":
-                print("Đổi IP thành công.")
-                return True
-            elif response_json.get("status") == "error":
-                error_msg = response_json.get("error", "")
-                m = re.search(r"Vui lòng chờ sau (\d+) giây", error_msg)
-                if m:
-                    wait_seconds = int(m.group(1)) + 2
-                    print(f"Lỗi đổi IP: {error_msg}. Đợi {wait_seconds} giây rồi retry lại...")
-                    time.sleep(wait_seconds)
-                    continue
-                else:
-                    print(f"Phản hồi lỗi không xác định từ API đổi IP: {response_json}")
-                    return False
-            else:
-                print(f"Phản hồi không mong đợi từ API đổi IP: {response_json}")
-                return False
-        except Exception as e:
-            print(f"Exception while changing IP: {e}. Đợi 10 giây rồi retry lại...")
-            time.sleep(10)
-            continue
-
-# ---------------------------------------
-# Đọc file proxy.txt
+# Đọc file proxy.txt - Đọc API keys
 # ---------------------------------------
 try:
     with open("proxy.txt", "r") as f:
-        proxy_lines = [line.strip() for line in f.readlines()]
-    if len(proxy_lines) != 4:
-        raise ValueError("Expected 4 proxy lines in proxy.txt.")
-
-    proxies = []
-    for line in proxy_lines:
-        proxy_parts = line.split("|")
-        if len(proxy_parts) != 2:
-            raise ValueError(f"Invalid format in proxy.txt.\nExpected: proxy|changeIP_url. Line: {line}")
-        raw_proxy = proxy_parts[0]
-        change_ip_url = proxy_parts[1]
-        proxies.append({"raw_proxy": raw_proxy, "change_ip_url": change_ip_url})
-        print(f"Loaded proxy: {raw_proxy}, Change IP URL: {change_ip_url}")
+        api_keys = [line.strip() for line in f.readlines()]
+    
+    if len(api_keys) < 6:
+        print(f"Cảnh báo: Có ít hơn 6 API key trong file proxy.txt. Một số luồng sẽ không hoạt động.")
+    
+    print(f"Đã tải {len(api_keys)} API key từ file proxy.txt")
 
 except Exception as e:
     print(f"Error reading proxy.txt: {e}")
-    proxies = []
+    api_keys = []
 
 # ---------------------------------------
 # Đọc file Excel profiles.xlsx
@@ -135,11 +120,8 @@ for i, row in enumerate(worksheet.iter_rows(min_row=2, max_col=6, values_only=Fa
 profiles_lock = threading.Lock()
 profile_index = 0  # index profile hiện tại
 
-def process_profile(thread_id, proxy_data, window_pos):
+def process_profile(thread_id, api_key, window_pos):
     global profile_index
-
-    raw_proxy = proxy_data["raw_proxy"]
-    change_ip_url = proxy_data["change_ip_url"]
 
     while True:
         with profiles_lock:
@@ -155,19 +137,31 @@ def process_profile(thread_id, proxy_data, window_pos):
 
         print(f"Thread {thread_id}: Processing profile {profile_id} (Row {row_number})")
 
-        # 1) Cập nhật proxy
-        if raw_proxy and change_ip_url:
-            if not update_proxy(profile_id, raw_proxy):
-                print(f"Thread {thread_id}: Skipping profile {profile_id} due to proxy update failure.")
-                with profiles_lock:
-                    workbook.save('profiles.xlsx')
+        # 1) Lấy proxy từ API key và cập nhật proxy cho profile
+        proxy = None
+        while True:
+            proxy_result = get_proxy_from_api(api_key)
+            
+            if isinstance(proxy_result, dict) and "wait" in proxy_result:
+                # Cần đợi trước khi lấy proxy mới
+                wait_seconds = proxy_result["wait"]
+                print(f"Thread {thread_id}: Đợi {wait_seconds} giây trước khi lấy proxy mới.")
+                time.sleep(wait_seconds)
                 continue
-
-            # 2) Đổi IP
-            if not change_ip(change_ip_url):
-                print(f"Thread {thread_id}: Sự cố đổi IP, không loại bỏ profile {profile_id}, sẽ retry.")
-        else:
-            print(f"Thread {thread_id}: Proxy info not available; skipping proxy update.")
+            elif proxy_result:
+                # Đã lấy được proxy
+                proxy = proxy_result
+                break
+            else:
+                # Lỗi khi lấy proxy, thử lại sau 10 giây
+                print(f"Thread {thread_id}: Lỗi khi lấy proxy, thử lại sau 10 giây.")
+                time.sleep(10)
+                continue
+                
+        # Cập nhật proxy cho profile
+        if not update_proxy(profile_id, proxy):
+            print(f"Thread {thread_id}: Skipping profile {profile_id} due to proxy update failure.")
+            continue
 
         # 3) Mở profile qua API
         start_url = f"http://127.0.0.1:19995/api/v3/profiles/start/{profile_id}?addination_args=--lang%3Dvi&win_pos={window_pos}&win_size=1800%2C1080&win_scale=0.35"
@@ -241,25 +235,27 @@ def process_profile(thread_id, proxy_data, window_pos):
 # Main
 # ---------------------------------------
 if __name__ == "__main__":
-    # Kiểm tra đủ 4 proxy chưa
-    if len(proxies) < 4:
-        print("Không đủ 4 proxy để chạy 4 luồng, vui lòng kiểm tra lại proxy.txt")
+    # Xác định số lượng luồng dựa trên số API key có sẵn
+    num_threads = min(6, len(api_keys))
+    
+    if num_threads == 0:
+        print("Không có API key nào trong file proxy.txt. Không thể chạy chương trình.")
         exit(1)
-
-    # Tạo 4 luồng, mỗi luồng xài 1 proxy
-    thread1 = threading.Thread(target=process_profile, args=(1, proxies[0], "0,0"))
-    thread2 = threading.Thread(target=process_profile, args=(2, proxies[1], "1800,0"))
-    thread3 = threading.Thread(target=process_profile, args=(3, proxies[2], "3600,0"))
-    thread4 = threading.Thread(target=process_profile, args=(4, proxies[3], "0,1080"))
-
-    thread1.start()
-    thread2.start()
-    thread3.start()
-    thread4.start()
-
-    thread1.join()
-    thread2.join()
-    thread3.join()
-    thread4.join()
+    
+    # Tạo và chạy các luồng dựa trên số API key có sẵn
+    threads = []
+    window_positions = ["0,0", "1800,0", "3600,0", "0,1080", "1800,1080", "3600,1080", "0,2160"]
+    
+    for i in range(num_threads):
+        thread = threading.Thread(
+            target=process_profile, 
+            args=(i+1, api_keys[i], window_positions[i])
+        )
+        threads.append(thread)
+        thread.start()
+        
+    # Chờ tất cả các luồng hoàn thành
+    for thread in threads:
+        thread.join()
 
     print("\nCompleted processing all profiles.")
